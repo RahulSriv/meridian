@@ -34,7 +34,7 @@ export function Header() {
           </Link>
           <div className="flex items-center gap-3">
             <a
-              href="https://github.com"
+              href="https://github.com/RahulSriv/meridian"
               target="_blank"
               rel="noopener noreferrer"
               className="hidden sm:inline-flex items-center gap-1.5 text-label-lg text-text-secondary hover:text-text-primary transition-colors"
