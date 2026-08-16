@@ -7,9 +7,9 @@
 
 ## Current Status
 
-**Active Phase:** Phase 6 — features + known bugs complete (share, export, freshness, regenerate, schema-strictness fix); deploy pending
-**Next Session:** Push to GitHub → update placeholder repo URLs → deploy to Vercel
-**Last Updated:** 2026-07-05
+**Active Phase:** Shipped. Live at https://meridian-sigma-six.vercel.app — pushed to GitHub (github.com/RahulSriv/meridian), deployed to Vercel, verified working end-to-end in production.
+**Next Session:** No known bugs open. Consider implementing IP-based rate limiting on the shared free tier (currently unenforced — see Pending Follow-ups).
+**Last Updated:** 2026-08-16
 
 ---
 
@@ -241,14 +241,33 @@ Verified live end-to-end: `octocat/Hello-World` now generates all 9 sections suc
 - **Added: bounded retry for Groq schema-validation flakiness.** Groq's strict `json_schema` mode occasionally emits a completion that fails our schema validation — empty output, an enum value outside the allowed set — as sampling variance rather than a deterministic prompt problem (the exact same prompt/context succeeds on retry). `app/api/analyze/route.ts`'s AI phase now retries up to 3 attempts when the error matches "does not match the expected schema" / "failed to generate JSON", emitting a `"Retrying guide generation..."` status event between attempts. Note: this does NOT help if the shared free-tier Groq key's per-minute token budget (30k TPM) is already exhausted from heavy request volume in a short window — that's a capacity limit, not sampling noise, and retries within the same minute will also fail. Space out repeated manual tests against the shared key.
 - **Fixed (real root cause of "loading forever" in local dev): React Strict Mode double-invoke bug in `GuideClient.tsx`.** This is why the user could not get a single successful run in the browser even when the exact same request succeeded via `curl` — curl bypasses the React frontend entirely, so it never hit this bug. Next.js dev enables React Strict Mode by default, which invokes effects mount → cleanup → mount again. The old code used a `fetchedKey` ref to skip the second invocation, assuming the first invocation's request would complete — but the first invocation's cleanup runs almost immediately, setting `cancelled = true` on the *one real request*, and the stream-reading loop bails out (`reader.cancel(); return;`) as soon as `cancelled` is checked after the very first chunk arrives. Meanwhile the guard prevented the second (real, never-cancelled) invocation from starting a new request at all. Net effect: the single request that ever ran was always killed after ~1 event, every time, regardless of repo or Groq behavior — store got stuck in `analyzing` status forever. Fixed by removing the `fetchedKey` skip entirely and giving each effect invocation its own `AbortController` + `cancelled` closure: the first (Strict Mode phantom) invocation's request now aborts cleanly via `controller.abort()` in the cleanup, while the second invocation proceeds normally to completion. Standard, correct pattern for effects with async work under Strict Mode. Verified: user confirmed it works now in the browser.
 
-**Dev server:** currently running on http://localhost:3000 (background); env loaded from `.env.local` (fresh GITHUB_TOKEN + GROQ_API_KEY set).
+**Pushed to GitHub:** https://github.com/RahulSriv/meridian (public). Placeholder `https://github.com` links updated to the real repo URL in `components/layout/Header.tsx`, `components/layout/Footer.tsx`, and `lib/export.ts`.
 
-**Next session:** Push to GitHub → update placeholder repo URLs (`components/layout/Header.tsx`, `components/layout/Footer.tsx`) → deploy to Vercel (see Pending Follow-ups below).
+**Deployed to Vercel:** https://meridian-sigma-six.vercel.app (user connected the repo via the Vercel dashboard; env vars `GROQ_API_KEY`, `GITHUB_TOKEN`, `GEMINI_API_KEY` set in Project Settings).
+
+## Session 8 — Complete ✅ (2026-08-16)
+
+**Fixed: free-tier Groq model removed from Groq's catalog entirely.** About 6 weeks after Session 7 (2026-07-05 → 2026-08-16), the shared free tier stopped working — both locally and on the freshly-deployed Vercel instance, identically, which was the key clue this wasn't an env-var or platform issue. Root cause: Groq deprecated and fully removed `meta-llama/llama-4-scout-17b-16e-instruct` (`error: "does not exist or you do not have access to it", code: "model_not_found"` — confirmed via Groq's docs that the model isn't in their current lineup at all, not just gated on this account).
+
+Fix required two parts, not just a model swap:
+1. **New model:** switched `GROQ_MODEL` (`lib/synthesizer.ts`) to `openai/gpt-oss-20b` — per Groq's structured-outputs docs, only `openai/gpt-oss-20b` and `openai/gpt-oss-120b` currently support the `strict: true` json_schema mode `streamObject` requires. Chose -20b over -120b: same free-tier TPM ceiling, faster, cheaper.
+2. **Tighter token budget, in two places:**
+   - `openai/gpt-oss-20b`'s free tier caps at a **hard 8000 tokens per request** (prompt + output combined) — much tighter than llama-4-scout's old 30k. Groq rejects the call outright (`rate_limit_exceeded`, `type: "tokens"`) with an exact count if exceeded, e.g. observed `Limit 8000, Requested 9065` for `pallets/flask`.
+   - `buildPrompt()`'s truncation budgets (README, tree, manifest, setup files, commits, PRs, todos, key files) were all cut by roughly a third from Session 7's values, targeting ~4200 input tokens worst case.
+   - Added an explicit `maxOutputTokens: 3200` to the `streamObject` call — without it, requests for real (non-trivial) repos were starting generation and getting **silently cut off mid-JSON** by an implicit default, producing confusing "Generated JSON does not match the expected schema... missing properties: ownership, firstPRs, weekOnePlan" errors instead of either succeeding or hitting the honest, already-implemented "too large for the free tier" message. With the explicit cap in place, oversized requests now fail fast (~6s) with the correct message, and requests within budget complete cleanly.
+
+Also discovered along the way: a long-running local dev-server process had degraded (`Jest worker encountered 2 child process exceptions`, `write EPIPE`) after extended HMR churn — unrelated to the app, but produced noisy/misleading logs until killed and restarted clean. Worth restarting the dev server if logs get incoherent after a long session.
+
+Verified end-to-end, both locally and on the live Vercel deployment: `octocat/Hello-World` (trivial), `pallets/flask` (the repo that was failing — moderate size, now completes in ~9s), and the user's own `RahulSriv/art-interpretation-system-multimodal-rag`. `tsc --noEmit` clean throughout.
+
+**Dev server:** running on http://localhost:3000 (background); env loaded from `.env.local`.
+
+**Next session:** No known bugs. Optional: implement IP-based rate limiting on the shared tier (see Pending Follow-ups) before any wider announcement/traffic, since there's currently no cap on `provider: "shared"` requests against the shared Groq key.
 
 ## Pending Follow-ups
 
-- **After pushing to GitHub:** update placeholder `https://github.com` links to the real repo URL in `components/layout/Header.tsx` and `components/layout/Footer.tsx`. Also consider adding the GitHub mark to the `ExampleGuides.tsx` repo cards.
-- GitHub mark icon added in `components/shared/GithubIcon.tsx` (lucide-react has no `Github` export) — reuse it for the above.
+- **No rate limiting on the shared free tier.** `FREE_ANALYSES_PER_DAY` exists in `.env.example` as a documented setting but is never read anywhere in the code — it's aspirational, not implemented. Anything hitting `/api/analyze` with `provider: "shared"` draws on the shared `GROQ_API_KEY` with no per-IP cap. Not urgent while traffic is low, but worth implementing (e.g. a simple in-memory or KV-backed IP counter) before wider sharing/launch — one bad actor or bot could exhaust the whole free-tier token budget for everyone.
+- Consider adding the GitHub mark to the `ExampleGuides.tsx` repo cards (icon already exists in `components/shared/GithubIcon.tsx`, lucide-react has no `Github` export).
 
 ---
 
