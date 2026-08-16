@@ -24,37 +24,41 @@ Meridian pulls a repo's README, file tree, manifest, setup files, recent commits
 
 ---
 
-## How it works
+## System design
 
 ```mermaid
-flowchart TD
-    User(("User")) -->|"1. paste repo URL"| Landing["Landing Page"]
-    Landing -->|"repo URL base64url-encoded<br/>as the guide ID — no DB"| GuidePage["Guide Page<br/>/guide/[id]"]
-    GuidePage --> Client["GuideClient<br/>fetch + NDJSON stream reader"]
+flowchart LR
+    subgraph Client["Browser"]
+        UI["Landing + Guide Pages<br/>(GuideClient)"]
+        Store[("Zustand Stores<br/>guide state, provider + key")]
+    end
 
-    Client -->|"2. POST repoUrl, provider, apiKey"| Analyze["POST /api/analyze"]
+    subgraph Server["Vercel — Next.js Server"]
+        direction TB
+        Analyze["POST /api/analyze<br/>(NDJSON stream)"]
+        Fresh["POST /api/freshness"]
+        Limiter["Rate Limiter<br/>shared tier, per-IP daily cap"]
+        Pipeline["Analyzer<br/>12-step context pipeline"]
+        Synth["Synthesizer<br/>buildPrompt + streamObject"]
 
-    Analyze --> RateCheck{"provider === shared?"}
-    RateCheck -->|"yes"| Limiter["Rate Limiter<br/>per-IP daily cap"]
-    Limiter -->|"429 if exceeded"| Client
-    RateCheck -->|"no — BYOK, skip"| Pipeline
-    Limiter -->|"allowed"| Pipeline["Analyzer<br/>12-step pipeline"]
+        Analyze --> Limiter --> Pipeline --> Synth
+    end
 
-    Pipeline -->|"3. fetch repo data<br/>(server GITHUB_TOKEN only)"| GitHub[("GitHub REST API<br/>via Octokit")]
-    GitHub -->|"README, tree, commits,<br/>PRs, key files, blame<br/>(binary files filtered out)"| Pipeline
+    subgraph External["External Services"]
+        GitHub[("GitHub REST API<br/>via Octokit")]
+        AI[("AI Providers<br/>shared Groq key, or<br/>BYOK Gemini / Groq / Claude / OpenAI")]
+    end
 
-    Pipeline -->|"RepoContext"| Synth["Synthesizer<br/>buildPrompt + streamObject"]
-    Synth -->|"4. structured prompt"| AI[("AI Provider<br/>shared Groq key, or<br/>BYOK Gemini/Groq/Claude/OpenAI")]
-    AI -->|"5. streamed JSON, 9 sections"| Synth
-    Synth -->|"6. NDJSON events"| Analyze
-    Analyze -->|"7. stream response"| Client
-    Client -->|"8. render sections<br/>progressively"| GuidePage
+    UI --> Analyze
+    UI --> Fresh
+    Store -.- UI
 
-    GuidePage -.->|"freshness check"| Fresh["POST /api/freshness"]
-    Fresh -.-> GitHub
+    Pipeline --> GitHub
+    Fresh --> GitHub
+    Synth --> AI
 ```
 
-No database, no server-side sessions — a guide's URL *is* its state. GitHub calls always use the server's own token; the AI provider key is either the shared server-side Groq key (rate-limited per IP) or a BYOK key the user supplies per-request from browser localStorage — either way, it's only ever used inline to call the model, never logged or persisted.
+No database, no server-side sessions — a guide's URL is its own state (the repo URL, base64url-encoded). GitHub calls always use the server's own token; the AI provider key is either the shared server-side Groq key (rate-limited per IP) or a BYOK key the user supplies per-request from browser localStorage — either way it's only ever used inline to call the model, never logged or persisted.
 
 ---
 
