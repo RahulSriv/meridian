@@ -24,6 +24,40 @@ Meridian pulls a repo's README, file tree, manifest, setup files, recent commits
 
 ---
 
+## How it works
+
+```mermaid
+flowchart TD
+    User(("User")) -->|"1. paste repo URL"| Landing["Landing Page"]
+    Landing -->|"repo URL base64url-encoded<br/>as the guide ID — no DB"| GuidePage["Guide Page<br/>/guide/[id]"]
+    GuidePage --> Client["GuideClient<br/>fetch + NDJSON stream reader"]
+
+    Client -->|"2. POST repoUrl, provider, apiKey"| Analyze["POST /api/analyze"]
+
+    Analyze --> RateCheck{"provider === shared?"}
+    RateCheck -->|"yes"| Limiter["Rate Limiter<br/>per-IP daily cap"]
+    Limiter -->|"429 if exceeded"| Client
+    RateCheck -->|"no — BYOK, skip"| Pipeline
+    Limiter -->|"allowed"| Pipeline["Analyzer<br/>12-step pipeline"]
+
+    Pipeline -->|"3. fetch repo data<br/>(server GITHUB_TOKEN only)"| GitHub[("GitHub REST API<br/>via Octokit")]
+    GitHub -->|"README, tree, commits,<br/>PRs, key files, blame<br/>(binary files filtered out)"| Pipeline
+
+    Pipeline -->|"RepoContext"| Synth["Synthesizer<br/>buildPrompt + streamObject"]
+    Synth -->|"4. structured prompt"| AI[("AI Provider<br/>shared Groq key, or<br/>BYOK Gemini/Groq/Claude/OpenAI")]
+    AI -->|"5. streamed JSON, 9 sections"| Synth
+    Synth -->|"6. NDJSON events"| Analyze
+    Analyze -->|"7. stream response"| Client
+    Client -->|"8. render sections<br/>progressively"| GuidePage
+
+    GuidePage -.->|"freshness check"| Fresh["POST /api/freshness"]
+    Fresh -.-> GitHub
+```
+
+No database, no server-side sessions — a guide's URL *is* its state. GitHub calls always use the server's own token; the AI provider key is either the shared server-side Groq key (rate-limited per IP) or a BYOK key the user supplies per-request from browser localStorage — either way, it's only ever used inline to call the model, never logged or persisted.
+
+---
+
 ## Features
 
 - **Streaming guide generation** — sections render progressively as the AI produces them
