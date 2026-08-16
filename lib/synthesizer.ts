@@ -120,7 +120,7 @@ Default Branch: ${context.defaultBranch}`
   );
 
   if (context.readme) {
-    parts.push(`## README\n${truncate(context.readme, 8000)}`);
+    parts.push(`## README\n${truncate(context.readme, 2200)}`);
   }
 
   const treePaths = context.fileTree
@@ -128,7 +128,7 @@ Default Branch: ${context.defaultBranch}`
     .map((f) => f.path)
     .join("\n");
   if (treePaths) {
-    parts.push(`## File Tree\n${truncate(treePaths, 4000)}`);
+    parts.push(`## File Tree\n${truncate(treePaths, 1200)}`);
   }
 
   if (context.packageJson) {
@@ -139,44 +139,44 @@ Default Branch: ${context.defaultBranch}`
       scripts: manifest.scripts ?? {},
     };
     parts.push(
-      `## Package Manifest (dependencies, devDependencies, scripts)\n${truncate(JSON.stringify(relevant, null, 2), 3000)}`
+      `## Package Manifest (dependencies, devDependencies, scripts)\n${truncate(JSON.stringify(relevant, null, 2), 900)}`
     );
   }
 
   if (context.setupFiles.length > 0) {
     const setupContent = context.setupFiles
-      .map((f) => `### ${f.name}\n${truncate(f.content, 1000)}`)
+      .map((f) => `### ${f.name}\n${truncate(f.content, 500)}`)
       .join("\n\n");
     parts.push(`## Setup Files\n${setupContent}`);
   }
 
   if (context.recentCommits.length > 0) {
     const commitsText = context.recentCommits
-      .slice(0, 50)
+      .slice(0, 15)
       .map((c) => `${c.date.slice(0, 10)} [${c.author}] ${c.title}`)
       .join("\n");
-    parts.push(`## Recent Commits (last 50)\n${truncate(commitsText, 6000)}`);
+    parts.push(`## Recent Commits (last 15)\n${truncate(commitsText, 1200)}`);
   }
 
   if (context.recentPRs.length > 0) {
     const prsText = context.recentPRs
-      .slice(0, 30)
-      .map((p) => `#${p.number} ${p.title}${p.body ? ": " + p.body.slice(0, 200) : ""}`)
+      .slice(0, 12)
+      .map((p) => `#${p.number} ${p.title}${p.body ? ": " + p.body.slice(0, 100) : ""}`)
       .join("\n");
-    parts.push(`## Recent Pull Requests\n${truncate(prsText, 6000)}`);
+    parts.push(`## Recent Pull Requests\n${truncate(prsText, 1200)}`);
   }
 
   if (context.todos.length > 0) {
     const todosText = context.todos
       .map((t) => `${t.kind} at ${t.file}:${t.line} — ${t.text}`)
       .join("\n");
-    parts.push(`## TODOs / FIXMEs / HACKs\n${truncate(todosText, 4000)}`);
+    parts.push(`## TODOs / FIXMEs / HACKs\n${truncate(todosText, 1000)}`);
   }
 
   if (context.keyFiles.length > 0) {
     const filesContent = context.keyFiles
-      .slice(0, 20)
-      .map((f) => `### ${f.path}\n${truncate(f.content, 2000)}`)
+      .slice(0, 8)
+      .map((f) => `### ${f.path}\n${truncate(f.content, 700)}`)
       .join("\n\n");
     parts.push(`## Key Source Files\n${filesContent}`);
   }
@@ -204,13 +204,21 @@ If you lack data for a section, make a reasonable inference from the file struct
   return parts.join("\n\n---\n\n");
 }
 
-// Groq model for both the free tier and BYOK Groq. Requirements:
-//  1. Supports `json_schema` structured output (streamObject needs it) —
-//     rules out llama-3.3-70b-versatile.
-//  2. High enough free-tier TPM for Meridian's large repo prompts (~13k tokens
-//     for a medium repo) — rules out gpt-oss-20b/120b (8k TPM) and qwen3 (6k).
-// llama-4-scout supports json_schema and has 30k TPM on the free tier.
-const GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+// Groq model for both the free tier and BYOK Groq.
+//
+// meta-llama/llama-4-scout-17b-16e-instruct (used previously — 30k free-tier
+// TPM, comfortably fit our prompts) was removed from Groq's model catalog
+// entirely as of 2026-08-16 ("model_not_found" — not an account-specific
+// deprecation). As of that date, `strict: true` json_schema structured
+// output — required by streamObject — is only supported by openai/gpt-oss-20b
+// and openai/gpt-oss-120b, both hard-capped at 8000 tokens PER REQUEST
+// (prompt + maxOutputTokens combined) on the free tier — Groq rejects the
+// call outright with a clear "tokens per minute" error if the total exceeds
+// it, rather than throttling gradually. buildPrompt()'s truncation budgets
+// above target ~4200 input tokens worst case, paired with
+// maxOutputTokens: 3200 below, for a ~7400 total — comfortable margin under
+// 8000. gpt-oss-20b chosen over -120b: same TPM ceiling, faster, cheaper.
+const GROQ_MODEL = "openai/gpt-oss-20b";
 
 function getModel(provider: Provider, apiKey?: string | null) {
   switch (provider) {
@@ -245,6 +253,12 @@ export function streamGuide(
     schema: GuideSectionsSchema,
     system: SYSTEM_PROMPT,
     prompt: buildPrompt(context),
+    // Without an explicit cap, real (non-trivial) repos were getting cut off
+    // mid-JSON on the free-tier Groq model — the response consistently ended
+    // a few keys short of all 9 required sections, which schema validation
+    // then rejected as malformed rather than "too short." A generous explicit
+    // ceiling avoids relying on the provider's own default.
+    maxOutputTokens: 3200,
     onError: onError ? ({ error }) => onError(error) : undefined,
   });
 }
