@@ -3,6 +3,7 @@ import { z } from "zod";
 import { buildRepoContext } from "@/lib/analyzer";
 import { streamGuide } from "@/lib/synthesizer";
 import { encodeGuideId } from "@/lib/utils";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { SECTION_ORDER } from "@/lib/types";
 import type { StreamEvent, Provider } from "@/lib/types";
 
@@ -32,6 +33,19 @@ export async function POST(req: NextRequest) {
   }
 
   const { repoUrl, apiKey, provider = "shared" } = parsed.data;
+
+  // Rate limit only shared-key requests — BYOK draws on the caller's own key.
+  if (provider === "shared") {
+    const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const { allowed } = checkRateLimit(ip);
+    if (!allowed) {
+      return new Response(
+        JSON.stringify({ error: "Daily limit reached for the free tier. Try again tomorrow, or use your own API key (BYOK).", code: "RATE_LIMITED" }),
+        { status: 429, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
+
   const enc = new TextEncoder();
 
   const stream = new ReadableStream({
