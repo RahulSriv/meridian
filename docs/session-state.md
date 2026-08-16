@@ -262,11 +262,18 @@ Verified end-to-end, both locally and on the live Vercel deployment: `octocat/He
 
 **Dev server:** running on http://localhost:3000 (background); env loaded from `.env.local`.
 
-**Next session:** No known bugs. Optional: implement IP-based rate limiting on the shared tier (see Pending Follow-ups) before any wider announcement/traffic, since there's currently no cap on `provider: "shared"` requests against the shared Groq key.
+**Next session:** No known bugs, no known open follow-ups besides the minor icon polish below.
+
+## Session 9 — Complete ✅ (2026-08-16, same day as Session 8)
+
+**Added: per-IP daily rate limit on the shared free tier.** `FREE_ANALYSES_PER_DAY` had existed in `.env.example` since the start but was never actually enforced anywhere in the code. Ported the same approach already validated in SpecLens (`speclens/src/lib/rate-limit/index.ts`) rather than inventing a new one: `lib/rate-limit.ts` — an in-memory `Map<ip, {count, resetAt}>` with a rolling 24h window, `checkRateLimit(ip)` returns `{allowed, remaining}`. Wired into `app/api/analyze/route.ts`: gates only `provider === "shared"` requests (BYOK requests use the caller's own key and are unaffected) before the AI call starts, returning `429 {error, code: "RATE_LIMITED"}` on the client's existing non-ok-response handling in `GuideClient.tsx` (no client changes needed — it already parses `data.error` from failed responses).
+
+Verified locally: 4 rapid shared-tier requests → first 3 succeed (200), 4th gets 429 with the expected message; a BYOK request with a dummy key sailed past the gate and failed at the AI call instead (proving BYOK isn't rate-limited). `tsc --noEmit` clean.
+
+**Known limitation (same as SpecLens, not new):** the `Map` is in-memory per serverless function instance, not a globally durable count — a cold start or scale-out on Vercel can reset an IP's counter. This isn't a precise global enforcement, but it blocks casual/scripted abuse within an instance's lifetime, which was the actual goal. A durable fix would need Vercel KV/Redis if this ever becomes a real problem in practice.
 
 ## Pending Follow-ups
 
-- **No rate limiting on the shared free tier.** `FREE_ANALYSES_PER_DAY` exists in `.env.example` as a documented setting but is never read anywhere in the code — it's aspirational, not implemented. Anything hitting `/api/analyze` with `provider: "shared"` draws on the shared `GROQ_API_KEY` with no per-IP cap. Not urgent while traffic is low, but worth implementing (e.g. a simple in-memory or KV-backed IP counter) before wider sharing/launch — one bad actor or bot could exhaust the whole free-tier token budget for everyone.
 - Consider adding the GitHub mark to the `ExampleGuides.tsx` repo cards (icon already exists in `components/shared/GithubIcon.tsx`, lucide-react has no `Github` export).
 
 ---
